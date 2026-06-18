@@ -1,0 +1,36 @@
+name: PR Review Summary
+
+on:
+  pull_request:
+
+jobs:
+
+  review:
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: Get Statistics
+        run: |
+          echo "FILES_CHANGED=$(git diff --name-only origin/main...HEAD | wc -l)" >> $GITHUB_ENV
+
+          echo "LINES_ADDED=$(git diff --numstat origin/main...HEAD | awk '{add+=$1} END {print add}')" >> $GITHUB_ENV
+
+          echo "LINES_REMOVED=$(git diff --numstat origin/main...HEAD | awk '{remove+=$2} END {print remove}')" >> $GITHUB_ENV
+
+      - name: Create Summary
+        run: |
+          echo "Files Changed: $FILES_CHANGED" > summary.txt
+          echo "Lines Added: $LINES_ADDED" >> summary.txt
+          echo "Lines Removed: $LINES_REMOVED" >> summary.txt
+
+      - name: Show Summary
+        run: |
+          cat summary.txt
