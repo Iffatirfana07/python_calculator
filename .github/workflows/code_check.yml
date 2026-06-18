@@ -1,0 +1,51 @@
+name: Code Quality
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+jobs:
+
+  quality:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pycodestyle
+        run: |
+          pip install pycodestyle
+
+      - name: Run pycodestyle
+        run: |
+          pycodestyle *.py
+
+      - name: Check line count
+        run: |
+          for file in *.py
+          do
+            lines=$(wc -l < $file)
+
+            echo "$file has $lines lines"
+
+            if [ $lines -gt 100 ]
+            then
+              echo "$file exceeds 100 lines"
+              exit 1
+            fi
+          done
+
+      - name: Check docstrings
+        run: |
+          python3 check_doc.py
