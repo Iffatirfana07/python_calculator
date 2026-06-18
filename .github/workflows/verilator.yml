@@ -1,0 +1,21 @@
+name: Custom Action Test
+
+on:
+  push:
+
+jobs:
+  test:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run My Custom Action
+        uses: Iffatirfana07/verilator-action@v1
+
+        with:
+          files: test1.sv,test2.sv
+          severity: warning
