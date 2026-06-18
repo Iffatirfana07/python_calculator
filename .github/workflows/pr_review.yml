@@ -1,0 +1,70 @@
+name: PR Review Summary
+
+on:
+  pull_request:
+
+jobs:
+  review:
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Get Statistics
+        run: |
+          echo "FILES_CHANGED=$(git diff --name-only origin/main...HEAD | wc -l)" >> $GITHUB_ENV
+
+          echo "LINES_ADDED=$(git diff --numstat origin/main...HEAD | awk '{add+=$1} END {print add}')" >> $GITHUB_ENV
+
+          echo "LINES_REMOVED=$(git diff --numstat origin/main...HEAD | awk '{remove+=$2} END {print remove}')" >> $GITHUB_ENV
+
+      - name: Find TODO and FIXME
+        run: |
+          echo "TODOS:" > todos.txt
+
+          grep -R "TODO" *.py >> todos.txt || true
+
+          echo "" >> todos.txt
+
+          echo "FIXMES:" >> todos.txt
+
+          grep -R "FIXME" *.py >> todos.txt || true
+
+      - name: Create Summary
+        run: |
+          echo "PR REVIEW SUMMARY" > summary.txt
+          echo "" >> summary.txt
+
+          echo "Files Changed: $FILES_CHANGED" >> summary.txt
+          echo "Lines Added: $LINES_ADDED" >> summary.txt
+          echo "Lines Removed: $LINES_REMOVED" >> summary.txt
+
+          echo "" >> summary.txt
+
+          cat todos.txt >> summary.txt
+
+      - name: Display Summary
+        run: |
+          cat summary.txt
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const body = fs.readFileSync('summary.txt', 'utf8');
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
