@@ -1,70 +1,131 @@
-name: PR Review Summary
+name: Automated PR Code Review Summary
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
 
 jobs:
   review:
-
     runs-on: ubuntu-latest
 
-    permissions:
-      pull-requests: write
-      contents: read
-
     steps:
-
-      - name: Checkout Code
+      - name: Checkout Complete Git History
         uses: actions/checkout@v4
-
-      - name: Get Statistics
-        run: |
-          echo "FILES_CHANGED=$(git diff --name-only origin/main...HEAD | wc -l)" >> $GITHUB_ENV
-
-          echo "LINES_ADDED=$(git diff --numstat origin/main...HEAD | awk '{add+=$1} END {print add}')" >> $GITHUB_ENV
-
-          echo "LINES_REMOVED=$(git diff --numstat origin/main...HEAD | awk '{remove+=$2} END {print remove}')" >> $GITHUB_ENV
-
-      - name: Find TODO and FIXME
-        run: |
-          echo "TODOS:" > todos.txt
-
-          grep -R "TODO" *.py >> todos.txt || true
-
-          echo "" >> todos.txt
-
-          echo "FIXMES:" >> todos.txt
-
-          grep -R "FIXME" *.py >> todos.txt || true
-
-      - name: Create Summary
-        run: |
-          echo "PR REVIEW SUMMARY" > summary.txt
-          echo "" >> summary.txt
-
-          echo "Files Changed: $FILES_CHANGED" >> summary.txt
-          echo "Lines Added: $LINES_ADDED" >> summary.txt
-          echo "Lines Removed: $LINES_REMOVED" >> summary.txt
-
-          echo "" >> summary.txt
-
-          cat todos.txt >> summary.txt
-
-      - name: Display Summary
-        run: |
-          cat summary.txt
-
-      - name: Comment on PR
-        uses: actions/github-script@v7
         with:
-          script: |
-            const fs = require('fs');
+          fetch-depth: 0
 
-            const body = fs.readFileSync('summary.txt', 'utf8');
+      - name: Fetch Target Base Branch
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }}:${{ github.event.pull_request.base.ref }}
 
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body
-            });
+      - name: Generate PR Metrics & Update Timeline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+
+        run: |
+
+          echo "=== Step 1: Compute Diff Metrics ==="
+
+          FILES_CHANGED=$(git diff --name-only $BASE_REF...HEAD | wc -l)
+
+          STAT_RAW=$(git diff --shortstat $BASE_REF...HEAD)
+
+          ADDITIONS=$(echo "$STAT_RAW" | grep -oE '[0-9]+ insertion' | awk '{print $1}')
+          DELETIONS=$(echo "$STAT_RAW" | grep -oE '[0-9]+ deletion' | awk '{print $1}')
+
+          TOTAL_ADD=${ADDITIONS:-0}
+          TOTAL_DEL=${DELETIONS:-0}
+
+          DIFF_STAT_TABLE=$(git diff --stat $BASE_REF...HEAD)
+
+          echo "=== Step 2: Scan for Debt Markers (TODO/FIXME) ==="
+
+          DEBT_SUMMARY=""
+          HAS_DEBT=0
+
+          while IFS= read -r file; do
+
+            [ -z "$file" ] && continue
+
+            DEBT_MATCHES=$(git diff $BASE_REF...HEAD -- "$file" \
+              | grep -E '^\+[^\+]' \
+              | grep -Ei 'TODO|FIXME' || true)
+
+            if [ ! -z "$DEBT_MATCHES" ]; then
+              HAS_DEBT=1
+
+              DEBT_SUMMARY="${DEBT_SUMMARY}\n#### ${file}\n\`\`\`diff\n${DEBT_MATCHES}\n\`\`\`\n"
+            fi
+
+          done < <(git diff --name-only $BASE_REF...HEAD)
+
+          if [ "$HAS_DEBT" -eq 0 ]; then
+            DEBT_SUMMARY="No active TODO or FIXME markers introduced in this pull request."
+          fi
+
+          echo "=== Step 3: Construct Markdown Comment ==="
+
+          COMMENT_MARKER="<!-- PR_REVIEW_SUMMARY -->"
+
+          COMMENT_BODY="$COMMENT_MARKER
+
+## Automated Code Review Summary
+
+| Metric | Value |
+|--------|--------|
+| **Files Changed** | $FILES_CHANGED |
+| **Lines Added** | $TOTAL_ADD |
+| **Lines Removed** | $TOTAL_DEL |
+
+### Diff Statistics
+
+\`\`\`text
+$DIFF_STAT_TABLE
+\`\`\`
+
+### Technical Debt Analysis (TODO / FIXME)
+
+$DEBT_SUMMARY
+"
+
+          JSON_PAYLOAD=$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')
+
+          echo "=== Step 4: Locate Existing Bot Comment ==="
+
+          COMMENTS_URL="https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments"
+
+          EXISTING_COMMENTS=$(curl -s \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "$COMMENTS_URL")
+
+          COMMENT_ID=$(echo "$EXISTING_COMMENTS" \
+            | jq -r --arg marker "$COMMENT_MARKER" \
+            '.[] | select(.body | contains($marker)) | .id' \
+            | head -n 1)
+
+          echo "=== Step 5: Create or Update Comment ==="
+
+          if [ -z "$COMMENT_ID" ] || [ "$COMMENT_ID" = "null" ]; then
+
+            curl -s -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$COMMENTS_URL" \
+              -d "$JSON_PAYLOAD"
+
+          else
+
+            curl -s -X PATCH \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/issues/comments/$COMMENT_ID" \
+              -d "$JSON_PAYLOAD"
+
+          fi
